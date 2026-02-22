@@ -1,4 +1,4 @@
 streamlit
-google-generativeai
-pypdf
+pytesseract
+pdf2image
 python-docx
