@@ -21,11 +21,11 @@ try:
         api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=api_key)
 except Exception:
-    st.error("🚨 Ошибка: API-ключ не найден. Убедитесь, что он есть в настройках.")
+    st.error("🚨 Ошибка: API-ключ не найден. Убедитесь, что он добавлен в переменные окружения Timeweb.")
     st.stop()
 
-st.title("OCR-сканер (Обход фильтров + Форматирование)")
-st.write("Загрузите документ. Система сохранит оригинальное форматирование и позволит скачать результат в DOCX, PDF или TXT.")
+st.title("OCR-сканер (Обход фильтров + Настройки формата)")
+st.write("Загрузите документ, выберите настройки извлечения и скачайте результат в нужном формате.")
 
 @st.cache_data(ttl=3600)
 def fetch_available_models():
@@ -38,9 +38,12 @@ def fetch_available_models():
 selected_model_id = st.selectbox("Выберите модель:", fetch_available_models())
 model = genai.GenerativeModel(selected_model_id)
 
+st.subheader("Настройки распознавания")
 col1, col2 = st.columns(2)
 with col1:
-    chunk_size = st.slider("Страниц за один запрос (для стабильности ставьте 3-5)", min_value=1, max_value=20, value=3)
+    chunk_size = st.slider("Страниц за один запрос", min_value=1, max_value=20, value=5)
+    # НОВАЯ ГАЛОЧКА ДЛЯ ФОРМАТИРОВАНИЯ
+    keep_formatting = st.checkbox("📑 Сохранять исходное визуальное форматирование (списки, заголовки)", value=True)
 with col2:
     anti_piracy_bypass = st.checkbox("🔥 Включить защиту от блокировок авторских прав", value=True)
 
@@ -56,8 +59,7 @@ if uploaded_file:
     with col_start:
         start_page = st.number_input("Начать со страницы:", min_value=1, max_value=total_pages, value=1)
     with col_end:
-        default_end = min(40, total_pages)
-        end_page = st.number_input("Закончить на странице:", min_value=1, max_value=total_pages, value=default_end)
+        end_page = st.number_input("Закончить на странице:", min_value=1, max_value=total_pages, value=min(40, total_pages))
 
     if st.button("Начать распознавание"):
         st.session_state.saved_text = ""
@@ -84,11 +86,13 @@ if uploaded_file:
             try:
                 gemini_file = genai.upload_file(tmp_path)
                 
-                # ПРОМПТ ДЛЯ ФОРМАТИРОВАНИЯ И ОБХОДА
-                prompt_parts = [
-                    "Распознай и извлеки весь текст из этого документа. "
-                    "ОБЯЗАТЕЛЬНО сохраняй оригинальное форматирование: абзацы, списки, выделяй заголовки."
-                ]
+                # ЛОГИКА ПРОМПТА С УЧЕТОМ НОВОЙ ГАЛОЧКИ
+                prompt_parts = ["Распознай и извлеки весь текст из этого документа. Точно сохраняй орфографию и пунктуацию."]
+                
+                if keep_formatting:
+                    prompt_parts.append("ОБЯЗАТЕЛЬНО сохраняй оригинальное форматирование документа: абзацы, списки, выделяй заголовки.")
+                else:
+                    prompt_parts.append("Выведи текст простыми, сплошными абзацами без сложного визуального форматирования, таблиц и колонок.")
                 
                 if anti_piracy_bypass:
                     prompt_parts.append(
@@ -104,7 +108,6 @@ if uploaded_file:
                 
                 raw_text = response.text
                 
-                # Очистка текста от спецсимвола
                 if anti_piracy_bypass:
                     clean_text = raw_text.replace("^", "")
                 else:
@@ -129,17 +132,14 @@ if uploaded_file:
             
         st.success("Распознавание завершено!")
 
-# --- БЛОК СКАЧИВАНИЯ ФАЙЛОВ ---
 if st.session_state.saved_text:
     st.subheader("Результат")
     st.text_area("Распознанный текст", st.session_state.saved_text, height=400)
     
     text_result = st.session_state.saved_text
     
-    # 1. Подготовка TXT
     txt_bytes = text_result.encode('utf-8')
     
-    # 2. Подготовка DOCX
     doc = Document()
     doc.add_heading('Распознанный текст', 0)
     for paragraph in text_result.split('\n'):
@@ -149,10 +149,8 @@ if st.session_state.saved_text:
     doc.save(doc_io)
     docx_bytes = doc_io.getvalue()
     
-    # 3. Подготовка PDF
     pdf_bytes = None
     try:
-        # Скачиваем шрифт с поддержкой кириллицы, если его нет
         font_path = "DejaVuSans.ttf"
         if not os.path.exists(font_path):
             urllib.request.urlretrieve("https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf", font_path)
@@ -163,7 +161,6 @@ if st.session_state.saved_text:
         pdf.set_font("DejaVu", "", 12)
         
         for line in text_result.split('\n'):
-            # Записываем построчно, поддерживая длинные строки
             pdf.multi_cell(0, 8, txt=line)
             
         pdf_file_path = "temp_result.pdf"
